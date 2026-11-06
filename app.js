@@ -100,7 +100,7 @@
     document.querySelectorAll('.tabs button').forEach(b => b.classList.toggle('on', b.dataset.tab === st.tab));
     const v = { home: vHome, bills: vBills, test: vTest, more: vMore }[st.tab]();
     $('#view').innerHTML = v;
-    $('#title').textContent = st.sub ? { income: 'Income', savings: 'Savings', crisis: 'If clients stop', settings: 'Settings' }[st.sub] : { home: 'Budget', bills: 'Bills', test: 'Test a purchase', more: 'More' }[st.tab];
+    $('#title').textContent = st.sub ? { income: 'Income', savings: 'Savings', crisis: 'If clients stop', settings: 'Settings' }[st.sub] : { home: 'OneFlesh Mini', bills: 'Bills', test: 'Test a purchase', more: 'More' }[st.tab];
     if (st.tab === 'test') renderTestResult();
   }
 
