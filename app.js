@@ -286,7 +286,9 @@
     const f = form.f;
     const recurring = E.PERIOD[f.freq];
     const one = f.freq === 'One-time';
-    const howKind = f.how === E.SAVE ? 'save' : String(f.how || '').startsWith('Split') ? 'split' : 'once';
+    const howKind = E.isPick(f.how) ? 'pick' : f.how === E.SAVE ? 'save' : String(f.how || '').startsWith('Split') ? 'split' : 'once';
+    const pick = howKind === 'pick';
+    const picks = pick ? E.parsePicks(f.how, one) : [];
     let h = `<h2>${form.i == null ? 'New bill' : 'Edit bill'}</h2>
       <div class="field"><label>What</label>${inp('name', f.name, '', 'Netflix')}</div>
       <div class="field"><label>Amount each time</label>${inp('amount', f.amount, 'number')}</div>
@@ -294,10 +296,14 @@
       <div class="field"><label>Who pays</label>${opts('who', PEOPLE, f.who, true)}</div>
       <div class="field"><label>How important</label>${opts('prio', PRIOS.map(p => [p[0], p[1], p[2]]), f.prio)}</div>
       <div class="field"><label>How often</label>${opts('freq', FREQS, f.freq)}</div>`;
-    if (recurring) h += `<div class="field"><label>Month it's due</label><div class="opts months">${E.MONTH_NAMES.map((m, k) => `<button type="button" class="opt ${Number(f.due) === k + 1 ? 'on' : ''}" data-set="due" data-val="${k + 1}">${m.slice(0, 3)}</button>`).join('')}</div></div>`;
-    if (one) h += `<div class="field"><label>When</label><input class="input" type="month" data-f="start" value="${esc(f.start || '')}"></div>`;
+    if (recurring) h += `<div class="field"><label>${pick ? 'Must be paid by (optional)' : "Month it's due"}</label><div class="opts months">${E.MONTH_NAMES.map((m, k) => `<button type="button" class="opt ${Number(f.due) === k + 1 ? 'on' : ''}" data-set="due" data-val="${k + 1}">${m.slice(0, 3)}</button>`).join('')}</div></div>`;
+    if (one) h += `<div class="field"><label>${pick ? 'Must be paid by (optional)' : 'When'}</label><input class="input" type="month" data-f="start" value="${esc(f.start || '')}"></div>`;
     if (recurring || one) {
-      h += `<div class="field"><label>How we pay it</label>${opts('howKind', [['once', 'All at once'], ['split', 'Split in payments'], ['save', one ? 'Save up before' : 'Save a bit each month']], howKind)}</div>`;
+      h += `<div class="field"><label>How we pay it</label>${opts('howKind', [['once', 'All at once'], ['split', 'Split in payments'], ['save', one ? 'Save up before' : 'Save a bit each month'], ['pick', 'Pick months']], howKind)}</div>`;
+      if (pick) {
+        const choices = one ? Array.from({ length: E.N_MONTHS }, (_, k) => [R.ctx.start + k, E.label(R.ctx.start + k, 'short')]) : E.MONTH_NAMES.map((m, k) => [k, m.slice(0, 3)]);
+        h += `<div class="field"><label>Months we pay${picks.length ? ' (' + picks.length + ')' : ''}</label><div class="opts months">${choices.map(([v, l]) => `<button type="button" class="opt ${picks.includes(v) ? 'on' : ''}" data-set="pick" data-val="${v}">${l}</button>`).join('')}</div></div>`;
+      }
       if (howKind === 'split') {
         const max = one ? 12 : recurring;
         h += `<div class="field"><label>How many payments</label>${opts('splitN', [2, 3, 4, 6, 12].filter(x => x <= max), (String(f.how).match(/\d+/) || [])[0])}</div>`;
@@ -337,18 +343,29 @@
 
   function setFormVal(k, v) {
     const f = form.f;
-    if (k === 'howKind') {
-      if (v === 'once') f.how = 'Pay all at once';
+    const one = f.freq === 'One-time';
+    if (k === 'pick') {
+      const list = E.parsePicks(f.how, one) || [];
+      const x = Number(v), at = list.indexOf(x);
+      if (at >= 0) list.splice(at, 1); else list.push(x);
+      f.how = E.pickText(list, one, f.due ? Number(f.due) - 1 : null) || E.PICK;
+    } else if (k === 'howKind') {
+      if (v === 'pick') { if (!E.isPick(f.how)) f.how = E.PICK; }
+      else if (v === 'once') f.how = 'Pay all at once';
       else if (v === 'save') f.how = E.SAVE;
       else f.how = 'Split in 2 payments';
     } else if (k === 'splitN') f.how = `Split in ${v} payments`;
     else if (k === 'freq') {
+      if (E.isPick(f.how) && (v === 'One-time') !== one) f.how = E.PICK;
       f.freq = v;
       if (E.RECURRING_MONTHLY.includes(v)) { f.how = ''; f.due = ''; }
       else if (!f.how) f.how = 'Pay all at once';
       if (v === 'One-time') f.due = '';
       if (E.PERIOD[v] && String(f.how).startsWith('Split') && Number((String(f.how).match(/\d+/) || [])[0]) > E.PERIOD[v]) f.how = 'Pay all at once';
-    } else if (k === 'due') f.due = Number(v);
+    } else if (k === 'due') {
+      f.due = E.isPick(f.how) && Number(f.due) === Number(v) ? '' : Number(v);
+      if (E.isPick(f.how)) f.how = E.pickText(E.parsePicks(f.how, one), one, f.due ? f.due - 1 : null) || E.PICK;
+    }
     else f[k] = v;
   }
 
@@ -357,10 +374,12 @@
     if (!String(f.name || '').trim()) return toast('Add a name');
     if (kind === 'bill') {
       if (!(Number(f.amount) > 0)) return toast('Add an amount');
-      if (E.PERIOD[f.freq] && !f.due) return toast("Pick the month it's due");
+      const pk = E.isPick(f.how) && (E.PERIOD[f.freq] || f.freq === 'One-time');
+      if (pk && !E.parsePicks(f.how, f.freq === 'One-time').length) return toast('Tap the months you pay');
+      if (!pk && E.PERIOD[f.freq] && !f.due) return toast("Pick the month it's due");
       f.amount = Number(f.amount); f.due = f.due ? Number(f.due) : '';
-      if (f.freq === 'One-time' && !f.start) return toast('Pick when');
-      if (!f.start) f.start = data.settings.start;
+      if (!pk && f.freq === 'One-time' && !f.start) return toast('Pick when');
+      if (!f.start && !(pk && f.freq === 'One-time')) f.start = data.settings.start;
       upsert('expenses', i, f); closeForm(); save('expenses');
     } else if (kind === 'income') {
       f.expected = Number(f.expected) || 0; f.worst = f.worst === '' || f.worst == null ? '' : Number(f.worst);

@@ -21,6 +21,27 @@
 
   function splitCount(how) { const m = String(how || '').match(/\d+/); return m ? Number(m[0]) : 1; }
 
+  // "Pay in Jan, Mar, May" (repeats each year) or "Pay in Nov 26, Jan 27" (one-time). Returns month numbers 0-11 or plan indexes.
+  const PICK = 'Pay in ';
+  const isPick = how => String(how || '').startsWith(PICK);
+  function parsePicks(how, oneTime) {
+    if (!isPick(how)) return null;
+    const out = [];
+    String(how).slice(PICK.length).split(',').forEach(t => {
+      const [mm, yy] = t.trim().split(/\s+/);
+      const k = MONTH_NAMES.findIndex(x => x.slice(0, 3).toLowerCase() === String(mm || '').toLowerCase());
+      if (k < 0) return;
+      if (oneTime) { if (yy) out.push((2000 + Number(yy)) * 12 + k); } else out.push(k);
+    });
+    return [...new Set(out)];
+  }
+  function pickText(list, oneTime, due) {
+    if (!list.length) return '';
+    let l = [...list].sort((a, b) => a - b);
+    if (!oneTime && due != null) l.sort((a, b) => mod(a - due - 1, 12) - mod(b - due - 1, 12)); // cycle ends at deadline
+    return PICK + l.map(v => (oneTime ? label(v, 'short') : MONTH_NAMES[v].slice(0, 3))).join(', ');
+  }
+
   function prepExpense(e, ctx) {
     const cad = n(e.amount) * (ctx.fx[e.cur] ?? 1);
     const s = e.start ? ym(e.start) : ctx.start;
@@ -28,19 +49,40 @@
     const due = n(e.due) || (s % 12) + 1;
     const oneTime = e.freq === 'One-time';
     const P = PERIOD[e.freq] || 1;
+    const picks = (oneTime || PERIOD[e.freq]) ? parsePicks(e.how, oneTime) : null;
     let N = 1;
-    if (e.how === SAVE) N = oneTime ? Math.max(1, s - ctx.start + 1) : P;
+    if (picks) N = Math.max(1, picks.length);
+    else if (e.how === SAVE) N = oneTime ? Math.max(1, s - ctx.start + 1) : P;
     else if (String(e.how || '').startsWith('Split')) N = oneTime ? splitCount(e.how) : Math.min(splitCount(e.how), P);
     const shift = oneTime && e.how === SAVE ? N - 1 : 0;
     const avg = cad * (PER_MONTH[e.freq] ?? 1);
+    const per = picks ? (oneTime ? cad : cad * 12 / P) / N : cad / N;
     function cost(m) {
+      if (picks) {
+        if (!picks.length) return 0;
+        if (oneTime) return picks.includes(m) ? per : 0;
+        return m < s || m > end ? 0 : picks.includes(m % 12) ? per : 0;
+      }
       if (oneTime) { const k = m - s + shift; return k >= 0 && k < N ? cad / N : 0; }
       if (m < s || m > end) return 0;
       if (RECURRING_MONTHLY.includes(e.freq)) return cad * PER_MONTH[e.freq];
       if (PERIOD[e.freq]) return mod((m % 12) + 1 - due, P) < N ? cad / N : 0;
       return cad;
     }
-    return { e, cad, s, end, due, oneTime, P, N, avg, cost };
+    // Deadline check: by each due date in the plan, have we paid enough? (Pick months and Save modes)
+    function shortBy() {
+      const hasDeadline = picks ? (oneTime ? !!e.start : !!n(e.due)) : e.how === SAVE && !oneTime;
+      if (!hasDeadline) return null;
+      const L = ctx.len || N_MONTHS, first = Math.max(ctx.start, oneTime ? ctx.start : s);
+      let paid = 0, need = 0;
+      for (let m = first; m < ctx.start + L; m++) {
+        paid += cost(m);
+        const isDue = oneTime ? m === s : m <= end && mod((m % 12) + 1 - due, P) === 0;
+        if (isDue) { need += cad; if (paid < need - 1) return { m, gap: need - paid }; if (oneTime) break; }
+      }
+      return null;
+    }
+    return { e, cad, s, end, due, oneTime, P, N, avg, cost, picks, per, shortBy };
   }
 
   function money(v, opts) {
@@ -53,13 +95,21 @@
     const x = prepExpense(e, ctx);
     if (!e.name) return '';
     if (RECURRING_MONTHLY.includes(e.freq)) return money(x.avg) + ' every month';
+    const short = x.shortBy();
+    const warn2 = short ? ' ⚠ short ' + money(short.gap) + ' by ' + label(short.m) : '';
+    if (x.picks) {
+      if (!x.picks.length) return 'Tap the months you pay';
+      const list = pickText(x.picks, x.oneTime, !x.oneTime && n(e.due) ? x.due - 1 : null).slice(PICK.length);
+      const by = x.oneTime ? (e.start ? ', due ' + label(x.s) : '') : n(e.due) ? ', due ' + MONTH_NAMES[x.due - 1].slice(0, 3) : '';
+      return (x.N > 1 ? x.N + ' × ' : '') + money(x.per) + ': ' + list + by + warn2;
+    }
     const per = money(x.cad / x.N);
     if (x.oneTime) {
       if (e.how === SAVE) return 'Save ' + per + '/month until ' + label(x.s);
       if (x.N > 1) return x.N + ' × ' + per + ' from ' + label(x.s);
       return money(x.cad) + ' in ' + label(x.s);
     }
-    if (e.how === SAVE) return 'Save ' + per + ' every month';
+    if (e.how === SAVE) return 'Save ' + per + ' every month' + warn2;
     const every = e.freq === 'Quarterly' ? ', every 3 months' : e.freq === 'Twice a year' ? ', every 6 months' : ', every year';
     const dueTxt = e.due ? MONTH_NAMES[x.due - 1] : '?';
     const warn = e.due ? '' : ' ⚠ pick month due';
@@ -81,7 +131,7 @@
     const fx = Object.assign({ CAD: 1 }, st.fx || {});
     const start = ym(st.start || '2026-11');
     const scenario = scenarioOverride || st.scenario || 'Normal';
-    const ctx = { fx, start };
+    const ctx = { fx, start, len: N_MONTHS };
     const months = Array.from({ length: N_MONTHS }, (_, k) => start + k);
     const exps = (data.expenses || []).filter(e => e.name).map(e => prepExpense(e, ctx));
     const people = ['Anne', 'Ricardo', 'Joint'];
@@ -159,6 +209,6 @@
     return { c, anneShare, ricShare, after, anneOwn, ricOwn, paying, redPaying, anneShort, ricShort, compare, N: nOf(mode) };
   }
 
-  root.BudgetEngine = { compute, describe, testPurchase, money, label, ym, ymStr, prioNum, MONTH_NAMES, SAVE, PERIOD, RECURRING_MONTHLY };
+  root.BudgetEngine = { compute, describe, parsePicks, pickText, isPick, PICK, N_MONTHS, testPurchase, money, label, ym, ymStr, prioNum, MONTH_NAMES, SAVE, PERIOD, RECURRING_MONTHLY };
   if (typeof module !== 'undefined') module.exports = root.BudgetEngine;
 })(typeof window !== 'undefined' ? window : globalThis);
