@@ -264,3 +264,68 @@ input[type=range] { width: 100%; accent-color: var(--anne); }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation: none !important; transition: none !important; }
 }
+
+/* ---------- desktop / wide screens ---------- */
+@media (min-width: 900px) {
+  body { max-width: none; margin: 0; padding: 0; display: grid; grid-template-columns: 232px minmax(0, 1fr); grid-template-rows: auto 1fr; min-height: 100vh; }
+  .top { grid-column: 1 / -1; padding: 14px 28px; }
+  .tabs { position: sticky; top: 70px; grid-column: 1; grid-row: 2; align-self: start; height: calc(100vh - 70px);
+    flex-direction: column; gap: 4px; max-width: none; margin: 0; padding: 22px 14px; border-top: 0; border-right: 1px solid var(--line); }
+  .tabs button { flex: none; flex-direction: row; gap: 12px; font-size: 15px; padding: 11px 14px; border-radius: 10px; border-bottom: 0; }
+  .tabs button.on { background: var(--soft); box-shadow: inset 3px 0 0 currentColor; }
+  main { grid-column: 2; grid-row: 2; width: 100%; max-width: 1180px; padding: 22px 32px 48px; }
+  main > .card:first-child, main > .seg:first-child { margin-top: 0; }
+
+  /* home: dashboard */
+  #view[data-v="home"] { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 18px; align-items: start;
+    grid-template-rows: auto auto auto auto 1fr;
+    grid-template-areas: "seg seg" "hero kpi" "alerts months" "who months" ". months"; }
+  #view[data-v="home"] > * { margin: 0; }
+  .a-seg { grid-area: seg; max-width: 460px; } .a-hero { grid-area: hero; align-self: stretch; } .a-kpi { grid-area: kpi; align-self: stretch; }
+  .a-kpi .card { display: flex; flex-direction: column; justify-content: center; }
+  .a-alerts { grid-area: alerts; } .a-months { grid-area: months; } .a-who { grid-area: who; }
+
+  /* bills: two columns of groups */
+  #view[data-v="bills"] .groups { columns: 2; column-gap: 24px; }
+  .group { break-inside: avoid; }
+  #view[data-v="bills"] .group { padding-bottom: 14px; }
+  #view[data-v="bills"] .group h4 { margin-top: 4px; }
+
+  /* test: form left, result right */
+  #view[data-v="test"] { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 20px; align-items: start; }
+  #view[data-v="test"] > * { margin: 0; }
+  #view[data-v="test"] #testres > .card:first-child { margin-top: 0; }
+
+  /* more + lists */
+  #view[data-v="more"] { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 18px; align-items: start; }
+  #view[data-v="more"] > * { margin: 0; }
+  #view[data-v="income"], #view[data-v="savings"] { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 0 18px; align-content: start; }
+  #view[data-v="income"] > .chip, #view[data-v="savings"] > .chip, #view[data-v="savings"] > .card.small { grid-column: 1 / -1; justify-self: start; }
+  #view[data-v="savings"] > .card.small { justify-self: stretch; }
+  #view[data-v="crisis"], #view[data-v="settings"] { max-width: 760px; }
+
+  /* forms as centered dialogs */
+  .sheet { align-items: center; padding: 24px; }
+  .panel { max-width: 600px; max-height: 88vh; border-radius: 20px; padding: 20px 28px 26px; box-shadow: 0 24px 60px rgba(0,0,0,.3); }
+  .panel .grab { display: none; }
+  .fab { right: 36px; bottom: 36px; }
+  .toast { bottom: 36px; left: calc(50% + 116px); }
+
+  [data-theme="future"] .panel { border: 1px solid var(--line); }
+  [data-theme="cyber"] .panel { border: 1px solid #FF2BD6; box-shadow: 0 0 40px rgba(255,43,214,.3); }
+  [data-theme="cyber"] .tabs { border-top: 0; border-right: 1px solid #FF2BD6; box-shadow: 8px 0 22px -12px rgba(255,43,214,.45); }
+  [data-theme="cyber"] .tabs button { font-size: 13px; }
+  [data-theme="cyber"] .tabs button.on { background: rgba(0,240,255,.08); }
+  [data-theme="future"] .tabs button.on { background: rgba(0,217,255,.08); }
+}
+
+/* mouse: hover feedback */
+@media (hover: hover) and (pointer: fine) {
+  .bill, button.card, .months .m, .list .item, .list a, .tabs button, .chip, .opt, .btn, .go { transition: background-color .15s, box-shadow .15s, transform .15s, filter .15s; }
+  .bill:hover, button.card:hover { transform: translateY(-1px); box-shadow: 0 6px 18px rgba(0,0,0,.12); }
+  .months .m:hover { background: var(--soft2); border-radius: 8px; }
+  .list .item:hover, .list a:hover { background: var(--soft2); }
+  .tabs button:hover:not(.on) { background: var(--soft2); color: var(--ink); }
+  .chip:hover:not(.on), .opt:hover:not(.on) { border-color: var(--focus); }
+  .btn:hover, .fab:hover { filter: brightness(1.08); }
+}

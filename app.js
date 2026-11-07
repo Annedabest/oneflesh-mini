@@ -24,7 +24,8 @@
   let lastSync = null;
   const st = { tab: 'home', sub: null, filter: 'All', openMonth: null };
   const test = Object.assign({ name: '', price: 1000, cur: 'CAD', t: 0, mode: 'All at once', annePct: 0.5 }, JSON.parse(localStorage.getItem(LS.test) || '{}'));
-  let R = E.compute(data);
+  let scen = localStorage.getItem('budget.scenario') || 'Normal'; // per phone, not synced
+  let R = E.compute(data, scen);
 
   function clone(o) { return JSON.parse(JSON.stringify(o)); }
 
@@ -46,7 +47,7 @@
   }
   applyTheme(theme);
   if (darkMQ && darkMQ.addEventListener) darkMQ.addEventListener('change', () => theme === 'auto' && applyTheme('auto'));
-  function recompute() { R = E.compute(data); }
+  function recompute() { R = E.compute(data, scen); }
   function persist() { localStorage.setItem(LS.data, JSON.stringify(data)); localStorage.setItem(LS.pending, JSON.stringify(pending)); }
 
   // ---------- sync ----------
@@ -118,7 +119,7 @@
   let lastView = '';
   function render() {
     const view = st.tab + '/' + (st.sub || '');
-    $('#view').classList.toggle('enter', view !== lastView); lastView = view;
+    $('#view').classList.toggle('enter', view !== lastView); lastView = view; $('#view').dataset.v = st.sub || st.tab;
     document.querySelectorAll('.tabs button').forEach(b => b.classList.toggle('on', b.dataset.tab === st.tab));
     const v = { home: vHome, bills: vBills, test: vTest, more: vMore }[st.tab]();
     $('#view').innerHTML = v;
@@ -129,12 +130,12 @@
   function vHome() {
     const i = curIdx(), r = R.rows[i];
     const sc = R.scenario;
-    let h = `<div class="seg" style="margin-top:6px">${[['Normal', 'Normal'], ['Worst case', 'Worst case'], ['No clients', 'No clients']].map(([v, l]) => `<button data-act="scenario" data-val="${v}" class="${sc === v ? 'on' : ''}">${l}</button>`).join('')}</div>`;
-    h += `<div class="card hero ${r.left < 0 ? 'red' : ''}">
+    let h = `<div class="seg a-seg" style="margin-top:6px">${[['Normal', 'Normal'], ['Worst case', 'Worst case'], ['No clients', 'No clients']].map(([v, l]) => `<button data-act="scenario" data-val="${v}" class="${sc === v ? 'on' : ''}">${l}</button>`).join('')}</div>`;
+    h += `<div class="card hero a-hero ${r.left < 0 ? 'red' : ''}">
       <div class="muted small">Left in ${E.label(r.m, 'month')}</div>
       <div class="big">${money(r.left)}</div>
       <div class="muted small">In ${money(r.in)} · Bills ${money(r.out)}${r.saving ? ' · Saved ' + money(r.saving) : ''}</div></div>`;
-    h += `<div class="grid2"><div class="card"><div class="muted small">Average left / month</div><div class="mid ${cls(R.avgLeft)}">${money(R.avgLeft)}</div></div>
+    h += `<div class="grid2 a-kpi"><div class="card"><div class="muted small">Average left / month</div><div class="mid ${cls(R.avgLeft)}">${money(R.avgLeft)}</div></div>
       <div class="card"><div class="muted small">Built up by ${E.label(R.months[R.months.length - 1])}</div><div class="mid ${cls(R.endTotal)}">${money(R.endTotal)}</div></div></div>`;
 
     // alerts
@@ -148,11 +149,11 @@
     al += `<div class="alert ${c.verdict === 'good' ? 'ok' : c.verdict === 'tight' ? 'amber' : ''}"><div>${c.verdict === 'good' ? '🟢' : c.verdict === 'tight' ? '🟠' : '🔴'}</div><div><b>If clients stop: ${money(c.left, { plus: true })}/mo</b><span class="small">${c.verdict === 'good' ? 'Covered' : c.verdict === 'tight' ? 'Covered, but tight' : 'Not covered'}</span></div><button class="go" data-act="goSub" data-val="crisis">See ›</button></div>`;
     const ef = (data.savings || []).find(s => /emergency/i.test(s.name));
     if (!ef || !Number(ef.perMonth)) al += `<div class="alert amber"><div>🛟</div><div><b>No emergency fund yet</b><span class="small">Goal: ${money(c.ef3)} (3 months)</span></div><button class="go" data-act="goSub" data-val="savings">Start ›</button></div>`;
-    h += `<div class="card"><h3>Heads up</h3>${al}</div>`;
+    h += `<div class="card a-alerts"><h3>Heads up</h3>${al}</div>`;
 
     // months
     const max = Math.max(...R.rows.map(x => Math.abs(x.left)), 1);
-    h += `<div class="card months"><h3>Month by month · tap one</h3>`;
+    h += `<div class="card months a-months"><h3>Month by month · tap one</h3>`;
     R.rows.forEach((x, k) => {
       h += `<button class="m" style="width:100%" data-act="month" data-i="${k}"><span class="small ${k === i ? '' : 'muted'}" style="text-align:left;font-weight:${k === i ? 700 : 400}">${x.short}</span>
         <span class="bar ${x.left < 0 ? 'neg' : ''}"><i style="width:${Math.max(3, Math.abs(x.left) / max * 100)}%"></i></span><span class="amt ${x.left < 0 ? 'bad' : ''}">${money(x.left)}</span></button>`;
@@ -167,7 +168,7 @@
 
     // who pays
     const avgBy = p => R.rows.reduce((a, x) => a + x.byWho[p], 0) / R.rows.length;
-    h += `<div class="card"><h3>Who pays (average / month)</h3>`;
+    h += `<div class="card a-who"><h3>Who pays (average / month)</h3>`;
     ['Anne', 'Ricardo'].forEach(p => {
       const earn = R.inByWho[p], pay = avgBy(p), d = earn - pay;
       h += `<div class="row between" style="padding:8px 0"><span class="who ${p}">${p}</span><span class="small muted">earns ${money(earn)} · pays ${money(pay)}</span><b class="${cls(d)}">${money(d, { plus: true })}</b></div>`;
@@ -183,6 +184,7 @@
     const total = list.reduce((a, x) => a + avgOf(x.e).avg, 0);
     let h = `<div class="card"><div class="muted small">${st.filter === 'All' ? 'All bills' : st.filter + "'s bills"}, average per month</div><div class="mid">${money(total)}</div></div>`;
     h += `<div class="chips">${['All', ...PEOPLE].map(f => `<button class="chip ${st.filter === f ? 'on' : ''}" data-act="filter" data-val="${f}">${f}</button>`).join('')}</div>`;
+    h += `<div class="groups">`;
     PRIOS.forEach(([p, lab], k) => {
       const g = list.filter(x => E.prioNum(x.e.prio) === k + 1);
       if (!g.length) return;
@@ -195,6 +197,7 @@
       });
       h += `</div>`;
     });
+    h += `</div>`;
     if (!list.length) h += `<div class="empty">No bills yet. Tap + to add one.</div>`;
     h += `<button class="fab" data-act="newBill" aria-label="Add bill">+</button>`;
     return h;
@@ -296,6 +299,7 @@
   let form = null; // {kind, i, f}
   function openForm(kind, i, f) { form = { kind, i, f: clone(f) }; drawForm(); $('#sheet').classList.remove('hidden'); }
   function closeForm() { form = null; $('#sheet').classList.add('hidden'); $('#sheet').innerHTML = ''; }
+  document.addEventListener('keydown', e => { if (e.key === 'Escape' && form) closeForm(); });
   function drawForm() {
     const s = $('#sheet');
     const scroll = s.querySelector('.panel') ? s.querySelector('.panel').scrollTop : 0;
@@ -433,7 +437,7 @@
     }
     const a = t.dataset.act, i = t.dataset.i != null ? Number(t.dataset.i) : null;
     switch (a) {
-      case 'scenario': data.settings.scenario = t.dataset.val; save('settings'); break;
+      case 'scenario': scen = t.dataset.val; localStorage.setItem('budget.scenario', scen); recompute(); render(); break;
       case 'month': st.openMonth = st.openMonth === i ? null : i; render(); break;
       case 'filter': st.filter = t.dataset.val; render(); break;
       case 'editBill': openForm('bill', i, data.expenses[i]); break;
