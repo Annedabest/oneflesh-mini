@@ -27,6 +27,25 @@
   let R = E.compute(data);
 
   function clone(o) { return JSON.parse(JSON.stringify(o)); }
+
+  // ---------- themes ----------
+  const THEMES = [['auto', 'Auto'], ['light', 'Light'], ['dark', 'Dark'], ['future', 'Future'], ['cyber', 'Cyber']];
+  const THEME_BAR = { light: '#1E293B', dark: '#0E1626', future: '#05070F', cyber: '#0B0816' };
+  const THEME_FONTS = { future: 'family=Space+Grotesk:wght@500;700', cyber: 'family=Orbitron:wght@600;800&family=Rajdhani:wght@500;600;700' };
+  const darkMQ = window.matchMedia ? matchMedia('(prefers-color-scheme: dark)') : null;
+  let theme = localStorage.getItem('budget.theme') || 'auto';
+  function applyTheme(t) {
+    theme = t; localStorage.setItem('budget.theme', t);
+    const real = t === 'auto' ? (darkMQ && darkMQ.matches ? 'dark' : 'light') : t;
+    document.documentElement.dataset.theme = real;
+    const m = document.querySelector('meta[name=theme-color]'); if (m) m.content = THEME_BAR[real];
+    if (THEME_FONTS[real] && !document.getElementById('font-' + real)) {
+      const l = document.createElement('link'); l.id = 'font-' + real; l.rel = 'stylesheet';
+      l.href = 'https://fonts.googleapis.com/css2?' + THEME_FONTS[real] + '&display=swap'; document.head.appendChild(l);
+    }
+  }
+  applyTheme(theme);
+  if (darkMQ && darkMQ.addEventListener) darkMQ.addEventListener('change', () => theme === 'auto' && applyTheme('auto'));
   function recompute() { R = E.compute(data); }
   function persist() { localStorage.setItem(LS.data, JSON.stringify(data)); localStorage.setItem(LS.pending, JSON.stringify(pending)); }
 
@@ -96,7 +115,10 @@
   const cls = v => (v < 0 ? 'bad' : 'good');
 
   // ---------- views ----------
+  let lastView = '';
   function render() {
+    const view = st.tab + '/' + (st.sub || '');
+    $('#view').classList.toggle('enter', view !== lastView); lastView = view;
     document.querySelectorAll('.tabs button').forEach(b => b.classList.toggle('on', b.dataset.tab === st.tab));
     const v = { home: vHome, bills: vBills, test: vTest, more: vMore }[st.tab]();
     $('#view').innerHTML = v;
@@ -217,7 +239,8 @@
   function vMore() {
     if (st.sub) return { income: vIncome, savings: vSavings, crisis: vCrisis, settings: vSettings }[st.sub]();
     const c = R.crisis;
-    return `<div class="card list">
+    return `<div class="card"><h3>Look</h3><div class="themes">${THEMES.map(([k, l]) => `<button class="th th-${k} ${theme === k ? 'on' : ''}" data-act="theme" data-val="${k}"><i></i>${l}</button>`).join('')}</div></div>
+      <div class="card list">
       <button class="item" data-act="goSub" data-val="income"><span>💵 Income</span><span class="muted">${money(R.totalIn)}/mo ›</span></button>
       <button class="item" data-act="goSub" data-val="savings"><span>🐷 Savings</span><span class="muted">${money((data.savings || []).reduce((a, s) => a + Number(s.perMonth || 0), 0))}/mo ›</span></button>
       <button class="item" data-act="goSub" data-val="crisis"><span>🛟 If clients stop</span><span class="${cls(c.left)}">${money(c.left, { plus: true })}/mo ›</span></button>
@@ -426,6 +449,7 @@
       case 'delete': del(); break;
       case 'saveEf': data.settings.efCash = Number($('#efcash').value) || 0; save('settings'); break;
       case 'pull': pull(); break;
+      case 'theme': applyTheme(t.dataset.val); lastView = ''; render(); break;
     }
   });
   document.addEventListener('input', e => {
