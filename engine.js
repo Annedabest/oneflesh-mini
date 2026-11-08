@@ -191,22 +191,42 @@
       const N = nOf(md), s = sOf(md);
       return R.map((_, k) => (k >= s && k < s + N ? cad / N : 0));
     }
-    const c = costs(mode);
+    const c = costs(mode), s0 = sOf(mode);
+    const run = arr => { let t = 0; return arr.map(v => (t += v)); };
     const anneShare = c.map(v => v * annePct), ricShare = c.map(v => v * (1 - annePct));
     const after = R.map((r, k) => r.left - c[k]);
-    const anneOwn = R.map((r, k) => r.inByWho.Anne - r.byWho.Anne - anneShare[k]);
-    const ricOwn = R.map((r, k) => r.inByWho.Ricardo - r.byWho.Ricardo - ricShare[k]);
+    // money built up month after month (before and after this purchase)
+    const cumC = run(c);
+    const baseA = run(R.map(r => r.inByWho.Anne - r.byWho.Anne));
+    const baseR = run(R.map(r => r.inByWho.Ricardo - r.byWho.Ricardo));
+    const anneRun = baseA.map((b, k) => b - cumC[k] * annePct);
+    const ricRun = baseR.map((b, k) => b - cumC[k] * (1 - annePct));
+    const coupleRun = R.map((r, k) => r.run - cumC[k]);
+    const from = arr => arr.map((v, k) => ({ v, k })).filter(x => x.k >= s0 && x.k < L);
+    const low = arr => from(arr).reduce((a, x) => (x.v < a.v ? x : a), { v: Infinity, k: -1 });
+    const firstNeg = arr => { const x = from(arr).find(y => y.v < -0.5); return x ? x.k : -1; };
+    const person = (runArr, base, pays) => ({ pays, low: low(runArr), shortAt: pays ? firstNeg(runArr) : -1, alreadyAt: base.findIndex(v => v < -0.5) });
+    const anne = person(anneRun, baseA, annePct > 0), ric = person(ricRun, baseR, annePct < 1);
+    const couple = { low: low(coupleRun), shortAt: firstNeg(coupleRun) };
     const paying = c.map(v => v > 0);
-    const redPaying = after.filter((v, k) => paying[k] && v < 0).length;
-    const anneShort = anneOwn.filter((v, k) => anneShare[k] > 0 && v < 0).length;
-    const ricShort = ricOwn.filter((v, k) => ricShare[k] > 0 && v < 0).length;
+    const redPaying = after.filter((v, k) => paying[k] && v < 0).length; // months that dip below 0 on their own
+    // fair split: the share each person can carry without their built-up money going below 0
+    const cap = base => Math.min(...from(base).filter(x => cumC[x.k] > 0.5).map(x => Math.max(0, x.v) / cumC[x.k]), Infinity);
+    const aCap = cap(baseA), rCap = cap(baseR), aMax = Math.min(1, aCap), rMax = Math.min(1, rCap);
+    let fair = null;
+    if (aMax + rMax >= 1 && cumC[L - 1] > 0) {
+      const lo = Math.max(0, 1 - rMax), hi = Math.min(1, aMax);
+      fair = Math.min(hi, Math.max(lo, aCap / (aCap + rCap))); // in proportion to what each has built up
+      const r5 = Math.round(fair * 20) / 20;
+      fair = r5 >= lo - 1e-9 && r5 <= hi + 1e-9 ? r5 : Math.round(fair * 100) / 100;
+    }
     const compare = ['All at once', 'Split in 3', 'Split in 6', 'Split in 12', 'Save up before'].map(md => {
       const cc = costs(md);
       const af = R.map((r, k) => r.left - cc[k]);
       const pay = af.filter((_, k) => cc[k] > 0);
       return { mode: md, per: cad / nOf(md), lowest: pay.length ? Math.min(...pay) : 0, red: pay.filter(v => v < 0).length, beyond: sOf(md) + nOf(md) > L };
     });
-    return { c, anneShare, ricShare, after, anneOwn, ricOwn, paying, redPaying, anneShort, ricShort, compare, N: nOf(mode) };
+    return { c, anneShare, ricShare, after, anneRun, ricRun, coupleRun, anne, ric, couple, paying, redPaying, fair, compare, N: nOf(mode) };
   }
 
   root.BudgetEngine = { compute, describe, parsePicks, pickText, isPick, PICK, N_MONTHS, testPurchase, money, label, ym, ymStr, prioNum, MONTH_NAMES, SAVE, PERIOD, RECURRING_MONTHLY };

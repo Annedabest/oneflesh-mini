@@ -76,6 +76,7 @@
       const p = pending[0];
       const body = p.table === 'settings' ? { settings: data.settings } : { table: p.table, rows: data[p.table], confirmEmpty: true };
       const res = await api(body);
+      if (res.error && /unknown table/.test(res.error)) { pending.shift(); persist(); continue; }
       if (res.error) throw new Error(res.error);
       pending.shift(); persist();
       last = res;
@@ -123,7 +124,7 @@
     document.querySelectorAll('.tabs button').forEach(b => b.classList.toggle('on', b.dataset.tab === st.tab));
     const v = { home: vHome, bills: vBills, test: vTest, more: vMore }[st.tab]();
     $('#view').innerHTML = v;
-    $('#title').textContent = st.sub ? { income: 'Income', savings: 'Savings', crisis: 'If clients stop', settings: 'Settings' }[st.sub] : { home: 'OneFlesh Mini', bills: 'Bills', test: 'Test a purchase', more: 'More' }[st.tab];
+    $('#title').textContent = st.sub ? { income: 'Income', savings: 'Savings', crisis: 'If clients stop', settings: 'Settings', tips: 'Tips' }[st.sub] : { home: 'OneFlesh Mini', bills: 'Bills', test: 'Test a purchase', more: 'More' }[st.tab];
     if (st.tab === 'test') renderTestResult();
   }
 
@@ -149,6 +150,8 @@
     al += `<div class="alert ${c.verdict === 'good' ? 'ok' : c.verdict === 'tight' ? 'amber' : ''}"><div>${c.verdict === 'good' ? '🟢' : c.verdict === 'tight' ? '🟠' : '🔴'}</div><div><b>If clients stop: ${money(c.left, { plus: true })}/mo</b><span class="small">${c.verdict === 'good' ? 'Covered' : c.verdict === 'tight' ? 'Covered, but tight' : 'Not covered'}</span></div><button class="go" data-act="goSub" data-val="crisis">See ›</button></div>`;
     const ef = (data.savings || []).find(s => /emergency/i.test(s.name));
     if (!ef || !Number(ef.perMonth)) al += `<div class="alert amber"><div>🛟</div><div><b>No emergency fund yet</b><span class="small">Goal: ${money(c.ef3)} (3 months)</span></div><button class="go" data-act="goSub" data-val="savings">Start ›</button></div>`;
+    const nt = smartTips().length + (data.tips || []).filter(t => !t.done).length;
+    if (nt) al += `<div class="alert amber"><div>💡</div><div><b>${nt} tip${nt > 1 ? 's' : ''} and to-dos</b><span class="small">Ways to free up money</span></div><button class="go" data-act="goSub" data-val="tips">See ›</button></div>`;
     h += `<div class="card a-alerts"><h3>Heads up</h3>${al}</div>`;
 
     // months
@@ -178,27 +181,78 @@
     return h;
   }
 
-  function vBills() {
-    const list = data.expenses.map((e, i) => ({ e, i })).filter(x => x.e.name && (st.filter === 'All' || x.e.who === st.filter));
-    const avgOf = e => { const b = R.billAvg.find(y => y.e === e); return b ? b : { avg: 0, cad: 0 }; };
-    const total = list.reduce((a, x) => a + avgOf(x.e).avg, 0);
-    let h = `<div class="card"><div class="muted small">${st.filter === 'All' ? 'All bills' : st.filter + "'s bills"}, average per month</div><div class="mid">${money(total)}</div></div>`;
-    h += `<div class="chips">${['All', ...PEOPLE].map(f => `<button class="chip ${st.filter === f ? 'on' : ''}" data-act="filter" data-val="${f}">${f}</button>`).join('')}</div>`;
-    h += `<div class="groups">`;
-    PRIOS.forEach(([p, lab], k) => {
-      const g = list.filter(x => E.prioNum(x.e.prio) === k + 1);
-      if (!g.length) return;
-      g.sort((a, b) => avgOf(b.e).avg - avgOf(a.e).avg || avgOf(b.e).cad - avgOf(a.e).cad);
-      h += `<div class="group"><h4><i class="dot p${k + 1}"></i>${lab}<span class="sum">${money(g.reduce((a, x) => a + avgOf(x.e).avg, 0))}/mo</span></h4>`;
-      g.forEach(({ e, i }) => {
-        const a = avgOf(e);
-        const amt = e.freq === 'One-time' ? `${money(a.cad)}<div class="small muted">once</div>` : `${money(a.avg)}<div class="small muted">/mo</div>`;
-        h += `<button class="bill ${esc(e.who)}" data-act="editBill" data-i="${i}"><div><div class="name">${esc(e.name)}</div><div class="desc">${esc(E.describe(e, R.ctx))}</div></div><div class="amt">${amt}</div></button>`;
+  // ---------- bills: filters ----------
+  const bf = Object.assign({ q: '', prio: '', freq: '', cat: '', month: '', sort: 'prio', open: false }, JSON.parse(localStorage.getItem('budget.billFilters') || '{}'));
+  const saveBf = () => localStorage.setItem('budget.billFilters', JSON.stringify(bf));
+  const FREQ_F = [['', 'Any'], ['Monthly', 'Monthly'], ['Weekly', 'Weekly'], ['Every 2 weeks', 'Every 2 wks'], ['Quarterly', 'Quarterly'], ['Twice a year', 'Twice a year'], ['Yearly', 'Yearly'], ['One-time', 'One-time'], ['pick', 'Pick months']];
+  const SORTS = [['prio', 'By priority'], ['big', 'Biggest first'], ['name', 'A to Z'], ['next', 'Next due']];
+  function billRows() {
+    const mk = bf.month === '' ? null : Number(bf.month);
+    const ex = new Map(R.exps.map(x => [x.e, x]));
+    const avgOf = e => R.billAvg.find(y => y.e === e) || { avg: 0, cad: 0 };
+    const q = bf.q.trim().toLowerCase();
+    const from = curIdx();
+    return data.expenses.map((e, i) => ({ e, i })).filter(({ e }) => {
+      if (!e.name) return false;
+      if (st.filter !== 'All' && e.who !== st.filter) return false;
+      if (bf.prio && E.prioNum(e.prio) !== Number(bf.prio)) return false;
+      if (bf.freq === 'pick' ? !E.isPick(e.how) : bf.freq && e.freq !== bf.freq) return false;
+      if (bf.cat && (e.cat || 'Other') !== bf.cat) return false;
+      if (q && !(`${e.name} ${e.cat} ${e.notes || ''}`.toLowerCase().includes(q))) return false;
+      return true;
+    }).map(x => {
+      const a = avgOf(x.e), c = ex.get(x.e);
+      x.avg = a.avg; x.cad = a.cad;
+      x.inMonth = mk == null || !c ? 0 : c.cost(R.months[mk]);
+      x.next = -1; if (c) for (let k = from; k < R.months.length; k++) if (c.cost(R.months[k]) > 0.005) { x.next = k; break; }
+      return x;
+    }).filter(x => mk == null || x.inMonth > 0.005);
+  }
+  function billCard(x) {
+    const { e, i } = x, mk = bf.month === '' ? null : Number(bf.month);
+    const amt = mk != null ? `${money(x.inMonth)}<div class="small muted">in ${R.rows[mk].short}</div>`
+      : e.freq === 'One-time' ? `${money(x.cad)}<div class="small muted">once</div>` : `${money(x.avg)}<div class="small muted">/mo</div>`;
+    const nx = bf.sort === 'next' && x.next >= 0 ? ` · next ${R.rows[x.next].short}` : '';
+    return `<button class="bill ${esc(e.who)}" data-act="editBill" data-i="${i}"><div><div class="name">${esc(e.name)}</div><div class="desc">${esc(E.describe(e, R.ctx))}${nx}</div></div><div class="amt">${amt}</div></button>`;
+  }
+  function billList() {
+    const list = billRows(), mk = bf.month === '' ? null : Number(bf.month);
+    const val = x => (mk != null ? x.inMonth : x.avg);
+    const total = list.reduce((a, x) => a + val(x), 0);
+    const whoTxt = st.filter === 'All' ? 'All bills' : st.filter + "'s bills";
+    let h = `<div class="card"><div class="muted small">${mk != null ? `${whoTxt} paid in ${R.rows[mk].label}` : `${whoTxt}, average per month`} · ${list.length} shown</div><div class="mid">${money(total)}</div></div>`;
+    if (!list.length) return h + `<div class="empty">${data.expenses.some(e => e.name) ? 'No bills match these filters.' : 'No bills yet. Tap + to add one.'}</div>`;
+    if (bf.sort === 'prio') {
+      h += `<div class="groups">`;
+      PRIOS.forEach(([p, lab], k) => {
+        const g = list.filter(x => E.prioNum(x.e.prio) === k + 1);
+        if (!g.length) return;
+        g.sort((a, b) => val(b) - val(a) || b.cad - a.cad);
+        h += `<div class="group"><h4><i class="dot p${k + 1}"></i>${lab}<span class="sum">${money(g.reduce((a, x) => a + val(x), 0))}${mk != null ? '' : '/mo'}</span></h4>${g.map(billCard).join('')}</div>`;
       });
-      h += `</div>`;
-    });
-    h += `</div>`;
-    if (!list.length) h += `<div class="empty">No bills yet. Tap + to add one.</div>`;
+      return h + `</div>`;
+    }
+    const cmp = { big: (a, b) => val(b) - val(a) || b.cad - a.cad, name: (a, b) => a.e.name.localeCompare(b.e.name), next: (a, b) => (a.next < 0) - (b.next < 0) || a.next - b.next || val(b) - val(a) }[bf.sort];
+    return h + `<div class="groups flat">${list.sort(cmp).map(billCard).join('')}</div>`;
+  }
+  function vBills() {
+    const n = ['prio', 'freq', 'cat', 'month'].filter(k => bf[k] !== '').length;
+    const cats = [...new Set(data.expenses.filter(e => e.name).map(e => e.cat || 'Other'))].sort();
+    const chip = (key, val, lab) => `<button class="chip ${String(bf[key]) === String(val) ? 'on' : ''}" data-act="bf" data-k="${key}" data-val="${esc(val)}">${lab}</button>`;
+    const sortLab = bf.sort !== 'prio' ? ' · ' + SORTS.find(x => x[0] === bf.sort)[1] : '';
+    let h = `<div class="billbar"><input class="input search" type="search" data-bf="q" placeholder="Search bills" value="${esc(bf.q)}">
+      <button class="chip fbtn ${bf.open || n || sortLab ? 'on2' : ''}" data-act="bfOpen">${bf.open ? '✕' : '⚙︎'} Filters${n ? ' · ' + n : ''}</button></div>`;
+    h += `<div class="chips">${['All', ...PEOPLE].map(f => `<button class="chip ${st.filter === f ? 'on' : ''}" data-act="filter" data-val="${f}">${f}</button>`).join('')}</div>`;
+    if (bf.open) {
+      h += `<div class="card fpanel">
+        <div class="flabel">Priority</div><div class="chips wrap">${chip('prio', '', 'Any')}${PRIOS.map((p, k) => chip('prio', k + 1, `<i class="dot p${k + 1}"></i> ${p[1]}`)).join('')}</div>
+        <div class="flabel">How often</div><div class="chips wrap">${FREQ_F.map(([v, l]) => chip('freq', v, l)).join('')}</div>
+        <div class="flabel">Category</div><div class="chips wrap">${chip('cat', '', 'Any')}${cats.map(c => chip('cat', c, esc(c))).join('')}</div>
+        <div class="flabel">Sort</div><div class="chips wrap">${SORTS.map(([v, l]) => `<button class="chip ${bf.sort === v ? 'on' : ''}" data-act="bfSort" data-val="${v}">${l}</button>`).join('')}</div>
+        <div class="flabel">Paid in month</div><div class="chips wrap">${chip('month', '', 'Any')}${R.rows.map((r, k) => chip('month', k, r.short)).join('')}</div>
+        ${n || sortLab ? `<button class="chip" data-act="bfClear" style="margin-top:8px">✕ Clear filters</button>` : ''}</div>`;
+    }
+    h += `<div id="billlist">${billList()}</div>`;
     h += `<button class="fab" data-act="newBill" aria-label="Add bill">+</button>`;
     return h;
   }
@@ -211,7 +265,7 @@
       <div class="field">${opts('test.cur', CURS, test.cur)}</div>
       <div class="field"><label>When</label><select class="input" data-test="t">${monthOpts().map(([k, l]) => `<option value="${k}" ${k === Number(test.t) ? 'selected' : ''}>${l}</option>`).join('')}</select></div>
       <div class="field"><label>How we pay</label>${opts('test.mode', modes, test.mode)}</div>
-      <div class="field"><label>Who pays</label><input type="range" min="0" max="100" step="5" data-test="annePct" value="${Math.round(test.annePct * 100)}">
+      <div class="field"><label>Who pays</label><input type="range" min="0" max="100" step="1" data-test="annePct" value="${Math.round(test.annePct * 100)}">
         <div class="row between small"><span class="who Anne" id="pa">Anne ${Math.round(test.annePct * 100)}%</span><span class="who Ricardo" id="pr">Ricardo ${100 - Math.round(test.annePct * 100)}%</span></div></div>
     </div><div id="testres"></div>`;
   }
@@ -220,11 +274,26 @@
     const cad = Number(test.price || 0) * (R.ctx.fx[test.cur] ?? 1);
     if (!cad) { el.innerHTML = ''; return; }
     const T = E.testPurchase(R, { cad, t: Number(test.t), mode: test.mode, annePct: test.annePct });
-    const ok = T.redPaying === 0;
+    const ok = T.couple.shortAt < 0, lab = k => R.rows[k] ? R.rows[k].short : '';
+    const pct = Math.round(test.annePct * 100);
+    const who = (name, P, pays) => {
+      let v;
+      if (!pays) v = `<b class="muted">Pays nothing</b>`;
+      else if (P.shortAt >= 0) v = `<b class="bad">❌ Short ${money(-P.low.v)} by ${lab(P.shortAt)}</b>`;
+      else v = `<b class="good">✅ Can cover</b>`;
+      const note = pays && P.low.k >= 0 ? `<div class="small muted" style="text-align:right">Lowest: ${money(P.low.v)} in ${lab(P.low.k)}</div>` : '';
+      return `<div class="row between" style="margin-top:8px;align-items:flex-start"><span class="who ${name}">${name} alone</span><div style="text-align:right">${v}${note}</div></div>`;
+    };
     let h = `<div class="card"><div class="verdict ${ok ? 'good' : 'bad'}">${ok ? '✅ Doable' : '❌ Not OK'}</div>
-      <div class="small muted">${ok ? 'No month goes red.' : T.redPaying + ' month(s) go red.'}${test.cur !== 'CAD' ? ' ≈ ' + money(cad) + ' CAD.' : ''}</div>
-      <div class="row between" style="margin-top:10px"><span class="who Anne">Anne alone</span><b class="${T.anneShort ? 'bad' : 'good'}">${test.annePct === 0 ? 'Pays nothing' : T.anneShort ? '❌ Short ' + T.anneShort + ' mo' : '✅ Can cover'}</b></div>
-      <div class="row between" style="margin-top:6px"><span class="who Ricardo">Ricardo alone</span><b class="${T.ricShort ? 'bad' : 'good'}">${test.annePct === 1 ? 'Pays nothing' : T.ricShort ? '❌ Short ' + T.ricShort + ' mo' : '✅ Can cover'}</b></div></div>`;
+      <div class="small muted">${ok ? (T.redPaying ? `Covered by money built up. ${T.redPaying} month(s) cost more than comes in.` : 'No month goes red.') : `Money runs out in ${lab(T.couple.shortAt)} (${money(T.couple.low.v)}).`}${test.cur !== 'CAD' ? ' ≈ ' + money(cad) + ' CAD.' : ''}</div>
+      ${who('Anne', T.anne, test.annePct > 0)}${who('Ricardo', T.ric, test.annePct < 1)}`;
+    if (T.fair != null) {
+      const f = Math.round(T.fair * 100);
+      h += f === pct ? `<div class="alert ok"><div>⚖️</div><div><b>Fair split: Anne ${f}% / Ricardo ${100 - f}%</b><span class="small">Based on what each has built up</span></div></div>`
+        : `<button class="alert amber" style="width:100%;text-align:left" data-act="fairSplit" data-val="${T.fair}"><div>⚖️</div><div><b>Fair split: Anne ${f}% / Ricardo ${100 - f}%</b><span class="small">Based on what each has built up</span></div><span class="go">Use ›</span></button>`;
+    } else if (ok) h += `<div class="alert amber"><div>⚖️</div><div><b>No split works for both alone</b><span class="small">Together you can, from shared money</span></div></div>`;
+    ['Anne', 'Ricardo'].forEach(p => { const P = p === 'Anne' ? T.anne : T.ric; if (P.alreadyAt >= 0) h += `<div class="small muted" style="margin-top:8px">ℹ️ Even without this, ${p} runs short by ${lab(P.alreadyAt)}.</div>`; });
+    h += `</div>`;
     h += `<div class="card"><h3>Months you pay</h3>`;
     R.rows.forEach((r, k) => {
       if (!T.paying[k]) return;
@@ -240,10 +309,11 @@
   }
 
   function vMore() {
-    if (st.sub) return { income: vIncome, savings: vSavings, crisis: vCrisis, settings: vSettings }[st.sub]();
+    if (st.sub) return { income: vIncome, savings: vSavings, crisis: vCrisis, settings: vSettings, tips: vTips }[st.sub]();
     const c = R.crisis;
     return `<div class="card"><h3>Look</h3><div class="themes">${THEMES.map(([k, l]) => `<button class="th th-${k} ${theme === k ? 'on' : ''}" data-act="theme" data-val="${k}"><i></i>${l}</button>`).join('')}</div></div>
       <div class="card list">
+      <button class="item" data-act="goSub" data-val="tips"><span>💡 Tips</span><span class="muted">${smartTips().length + (data.tips || []).filter(t => !t.done).length} ›</span></button>
       <button class="item" data-act="goSub" data-val="income"><span>💵 Income</span><span class="muted">${money(R.totalIn)}/mo ›</span></button>
       <button class="item" data-act="goSub" data-val="savings"><span>🐷 Savings</span><span class="muted">${money((data.savings || []).reduce((a, s) => a + Number(s.perMonth || 0), 0))}/mo ›</span></button>
       <button class="item" data-act="goSub" data-val="crisis"><span>🛟 If clients stop</span><span class="${cls(c.left)}">${money(c.left, { plus: true })}/mo ›</span></button>
@@ -251,6 +321,52 @@
       <a href="${esc(CFG.sheetUrl)}" target="_blank" rel="noopener"><span>📊 Open Google Sheet</span><span class="muted">↗</span></a></div>`;
   }
   const back = `<button class="chip" data-act="back" style="margin-top:6px">‹ Back</button>`;
+
+  // ---------- tips ----------
+  const LUMPY = ['Quarterly', 'Twice a year', 'Yearly', 'One-time'];
+  function smartTips() {
+    const out = [], idx = e => data.expenses.indexOf(e);
+    R.redMonths.forEach(m => out.push({ icon: '🔴', t: `${m.label} goes red by ${money(-m.left)}`, s: m.items[0] ? `Biggest: ${m.items[0].name} ${money(m.items[0].cost)}. Spread it.` : '', act: m.items[0] ? ['editBill', idx(m.items[0].e)] : null }));
+    R.exps.forEach(x => {
+      const e = x.e, d = E.describe(e, R.ctx);
+      if (/⚠/.test(d)) out.push({ icon: '⏰', t: `${e.name}: ${d.split('⚠')[1].trim()}`, s: 'Not enough set aside before the deadline.', act: ['editBill', idx(e)] });
+      else if (LUMPY.includes(e.freq) && e.how !== E.SAVE && !E.isPick(e.how) && !/^Split/.test(e.how || '') && x.cad >= 500)
+        out.push({ icon: '📅', t: `Spread ${e.name}`, s: `${money(x.cad)} hits in one month. Save a bit each month instead.`, act: ['editBill', idx(e)] });
+      if (e.end && e.freq !== 'One-time') {
+        const k = E.ym(e.end) - R.months[0];
+        if (k >= 0 && k < R.months.length - 1 && x.avg > 0) out.push({ icon: '🎉', t: `${e.name} ends ${E.label(E.ym(e.end))}`, s: `${money(x.avg)}/mo frees up. Move it to savings?`, act: ['goSub', 'savings'] });
+      }
+    });
+    const c = R.crisis;
+    if (c.efCash < c.ef3) out.push({ icon: '🛟', t: `Emergency fund: ${money(c.efCash)} of ${money(c.ef3)}`, s: 'Goal is 3 months of must-pay bills.', act: ['goSub', 'savings'] });
+    if (c.verdict !== 'good') out.push({ icon: c.verdict === 'tight' ? '🟠' : '🔴', t: `If clients stop: ${money(c.left, { plus: true })}/mo`, s: c.verdict === 'tight' ? 'Covered, but tight.' : 'Not covered.', act: ['goSub', 'crisis'] });
+    return out;
+  }
+  function vTips() {
+    const c = R.crisis, tips = smartTips(), todo = data.tips;
+    let h = back + `<div class="grid2" style="margin-top:12px">
+      <div class="card"><div class="muted small">Left / month (avg)</div><div class="mid ${cls(R.avgLeft)}">${money(R.avgLeft)}</div></div>
+      <div class="card"><div class="muted small">Worst month · ${R.worst.short}</div><div class="mid ${cls(R.worst.left)}">${money(R.worst.left)}</div></div>
+      <div class="card"><div class="muted small">If clients stop</div><div class="mid ${cls(c.left)}">${money(c.left, { plus: true })}</div></div>
+      <div class="card"><div class="muted small">Emergency fund / goal</div><div class="mid">${money(c.efCash)} <span class="small muted">/ ${money(c.ef3)}</span></div></div></div>`;
+    h += `<div class="card"><h3>Smart tips · live</h3>${tips.length ? tips.map(t => `<${t.act ? 'button' : 'div'} class="tip"${t.act ? ` data-act="${t.act[0]}" ${t.act[0] === 'goSub' ? 'data-val' : 'data-i'}="${esc(t.act[1])}"` : ''}><span class="ti">${t.icon}</span><span><b>${esc(t.t)}</b><span class="small muted">${esc(t.s)}</span></span>${t.act ? '<span class="go">›</span>' : ''}</${t.act ? 'button' : 'div'}>`).join('') : '<div class="small muted">All good. Nothing to fix right now.</div>'}</div>`;
+    h += `<div class="card"><h3>Our to-do list</h3>`;
+    if (!todo) h += `<div class="small muted">Syncing with the Sheet…</div>`;
+    else {
+      const left = todo.filter(t => !t.done).length;
+      h += `<div class="small muted" style="margin-bottom:6px">${left} left · ${todo.length - left} done · same list as the Sheet</div>`;
+      todo.forEach((t, k) => { h += `<div class="todo ${t.done ? 'done' : ''}"><button class="tick" data-act="todo" data-i="${k}" aria-label="Done">${t.done ? '✓' : ''}</button><span>${esc(t.text)}</span><button class="x" data-act="todoDel" data-i="${k}" aria-label="Delete">✕</button></div>`; });
+      h += todo.length < 20 ? `<div class="row" style="margin-top:10px"><input class="input" id="todoNew" placeholder="Add a to-do" style="padding:10px 12px;font-size:16px"><button class="chip on" data-act="todoAdd">Add</button></div>` : '';
+    }
+    h += `</div>`;
+    const cut = R.billAvg.filter(b => b.e.name && E.prioNum(b.e.prio) >= 3).sort((a, b) => E.prioNum(b.e.prio) - E.prioNum(a.e.prio) || b.avg - a.avg);
+    if (cut.length) {
+      h += `<div class="card"><h3>Cut first</h3><div class="small muted" style="margin-bottom:6px">Cutting all of these frees ${money(cut.reduce((a, b) => a + b.avg, 0))}/mo</div>`;
+      cut.forEach(b => { h += `<button class="cutrow" data-act="editBill" data-i="${data.expenses.indexOf(b.e)}"><i class="dot p${E.prioNum(b.e.prio)}"></i><span class="nm">${esc(b.e.name)}</span><span class="who ${esc(b.e.who)}">${esc(b.e.who)}</span><b>${money(b.avg)}</b></button>`; });
+      h += `</div>`;
+    }
+    return h;
+  }
 
   function vIncome() {
     let h = back;
@@ -299,7 +415,7 @@
   let form = null; // {kind, i, f}
   function openForm(kind, i, f) { form = { kind, i, f: clone(f) }; drawForm(); $('#sheet').classList.remove('hidden'); }
   function closeForm() { form = null; $('#sheet').classList.add('hidden'); $('#sheet').innerHTML = ''; }
-  document.addEventListener('keydown', e => { if (e.key === 'Escape' && form) closeForm(); });
+  document.addEventListener('keydown', e => { if (e.key === 'Escape' && form) closeForm(); if (e.key === 'Enter' && e.target.id === 'todoNew') document.querySelector('[data-act="todoAdd"]').click(); });
   function drawForm() {
     const s = $('#sheet');
     const scroll = s.querySelector('.panel') ? s.querySelector('.panel').scrollTop : 0;
@@ -440,6 +556,14 @@
       case 'scenario': scen = t.dataset.val; localStorage.setItem('budget.scenario', scen); recompute(); render(); break;
       case 'month': st.openMonth = st.openMonth === i ? null : i; render(); break;
       case 'filter': st.filter = t.dataset.val; render(); break;
+      case 'bf': bf[t.dataset.k] = bf[t.dataset.k] === t.dataset.val ? '' : t.dataset.val; saveBf(); render(); break;
+      case 'todo': data.tips[+t.dataset.i].done = !data.tips[+t.dataset.i].done; save('tips'); break;
+      case 'todoDel': if (confirm('Delete this to-do?')) { data.tips.splice(+t.dataset.i, 1); save('tips'); } break;
+      case 'todoAdd': { const v = ($('#todoNew').value || '').trim(); if (v) { data.tips.push({ text: v, done: false }); save('tips'); } break; }
+      case 'bfSort': bf.sort = t.dataset.val; saveBf(); render(); break;
+      case 'bfOpen': bf.open = !bf.open; saveBf(); render(); break;
+      case 'bfClear': Object.assign(bf, { prio: '', freq: '', cat: '', month: '', sort: 'prio' }); saveBf(); render(); break;
+      case 'fairSplit': test.annePct = Number(t.dataset.val); localStorage.setItem(LS.test, JSON.stringify(test)); render(); break;
       case 'editBill': openForm('bill', i, data.expenses[i]); break;
       case 'newBill': openForm('bill', null, { name: '', who: st.filter !== 'All' ? st.filter : 'Joint', prio: '2 Important', cat: '', cur: 'CAD', amount: '', freq: 'Monthly', due: '', how: '', start: '', end: '', notes: '' }); break;
       case 'editIncome': openForm('income', i, data.income[i]); break;
@@ -463,6 +587,7 @@
       const pv = document.querySelector('.preview');
       if (pv && form.kind === 'bill') pv.textContent = E.describe(Object.assign({}, form.f, { name: form.f.name || 'x' }), R.ctx) || '-';
     }
+    if (t.dataset.bf) { bf[t.dataset.bf] = t.value; saveBf(); const l = $('#billlist'); if (l) l.innerHTML = billList(); return; }
     if (t.dataset.test) {
       const k = t.dataset.test;
       test[k] = k === 'annePct' ? Number(t.value) / 100 : k === 't' ? Number(t.value) : t.value;

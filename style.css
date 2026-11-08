@@ -132,6 +132,33 @@ input[type=range] { width: 100%; accent-color: var(--anne); }
 .toast.hidden { display: none; }
 .empty { text-align: center; color: var(--muted); padding: 30px 10px; }
 
+.billbar { display: flex; gap: 8px; margin-top: 10px; }
+.billbar .search { flex: 1; min-width: 0; padding: 10px 14px; font-size: 16px; }
+.chips.wrap { flex-wrap: wrap; overflow: visible; padding-bottom: 2px; }
+.chip.fbtn { flex: none; }
+.chip.on2 { border-color: var(--primary); color: var(--primary); font-weight: 600; }
+.chip .dot { display: inline-block; vertical-align: middle; width: 8px; height: 8px; }
+.fpanel { padding: 12px 14px; margin-top: 4px; }
+.flabel { font-size: 12px; font-weight: 600; color: var(--muted); margin: 8px 0 2px; text-transform: uppercase; letter-spacing: .4px; }
+.fpanel .flabel:first-child { margin-top: 0; }
+
+.tip { display: flex; align-items: center; gap: 12px; width: 100%; text-align: left; padding: 11px 4px; border-bottom: 1px solid var(--line); }
+.tip:last-child { border-bottom: 0; }
+.tip .ti { font-size: 20px; flex: none; }
+.tip b { display: block; font-weight: 600; }
+.tip .go { margin-left: auto; color: var(--primary); font-weight: 700; font-size: 18px; }
+.todo { display: flex; align-items: center; gap: 12px; padding: 9px 0; border-bottom: 1px solid var(--line); }
+.todo:last-of-type { border-bottom: 0; }
+.todo span { flex: 1; }
+.todo .tick { width: 26px; height: 26px; flex: none; border-radius: 8px; border: 2px solid var(--line); color: var(--on); font-weight: 700; display: grid; place-items: center; }
+.todo.done .tick { background: var(--good); border-color: var(--good); }
+.todo.done span { text-decoration: line-through; color: var(--muted); }
+.todo .x { color: var(--muted); font-size: 13px; padding: 4px 6px; opacity: .6; }
+.cutrow { display: grid; grid-template-columns: 12px 1fr auto 70px; align-items: center; gap: 10px; width: 100%; text-align: left; padding: 9px 2px; border-bottom: 1px solid var(--line); }
+.cutrow:last-child { border-bottom: 0; }
+.cutrow b { text-align: right; font-variant-numeric: tabular-nums; }
+.cutrow .nm { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
 /* theme picker */
 .themes { display: grid; grid-template-columns: repeat(5, 1fr); gap: 8px; }
 .th { display: flex; flex-direction: column; align-items: center; gap: 6px; padding: 8px 0 6px; border-radius: 12px; border: 1px solid var(--line); background: var(--field); font-size: 12px; font-weight: 600; }
@@ -303,6 +330,10 @@ input[type=range] { width: 100%; accent-color: var(--anne); }
   #view[data-v="income"] > .chip, #view[data-v="savings"] > .chip, #view[data-v="savings"] > .card.small { grid-column: 1 / -1; justify-self: start; }
   #view[data-v="savings"] > .card.small { justify-self: stretch; }
   #view[data-v="crisis"], #view[data-v="settings"] { max-width: 760px; }
+  #view[data-v="tips"] { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 18px; align-items: start; }
+  #view[data-v="tips"] > * { margin: 0; }
+  #view[data-v="tips"] > .chip, #view[data-v="tips"] > .grid2 { grid-column: 1 / -1; justify-self: start; }
+  #view[data-v="tips"] > .grid2 { justify-self: stretch; grid-template-columns: repeat(4, 1fr); }
 
   /* forms as centered dialogs */
   .sheet { align-items: center; padding: 24px; }
@@ -322,6 +353,7 @@ input[type=range] { width: 100%; accent-color: var(--anne); }
 /* mouse: hover feedback */
 @media (hover: hover) and (pointer: fine) {
   .bill, button.card, .months .m, .list .item, .list a, .tabs button, .chip, .opt, .btn, .go { transition: background-color .15s, box-shadow .15s, transform .15s, filter .15s; }
+  .tip:hover, .cutrow:hover { background: var(--soft2); border-radius: 8px; }
   .bill:hover, button.card:hover { transform: translateY(-1px); box-shadow: 0 6px 18px rgba(0,0,0,.12); }
   .months .m:hover { background: var(--soft2); border-radius: 8px; }
   .list .item:hover, .list a:hover { background: var(--soft2); }
